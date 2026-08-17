@@ -179,8 +179,8 @@
   .doc-section{ margin-bottom:16px; }
   .doc-section h3{ color:var(--brown); font-size:15.5px; margin:0 0 7px; font-weight:800; }
   .doc-section .spec-lab{ font-size:12px; font-weight:800; margin-bottom:3px; }
-  .doc-section ul{ margin:0 0 9px; padding-inline-start:19px; font-size:12px; line-height:1.65; }
-  .doc-section ul li{ margin-bottom:1px; }
+  .doc-section .spec-list{ margin:0 0 9px; }
+  .doc-section .spec-line{ font-size:12px; line-height:1.65; text-align:right; direction:rtl; padding-right:16px; }
   table.doc-table{ width:100%; border-collapse:collapse; margin-bottom:5px; font-size:12px; }
   table.doc-table th{ background:#1b1b1b; color:#fff; padding:6px 4px; font-weight:700; border:1px solid #1b1b1b; }
   table.doc-table td{ border:1px solid #cfc4a8; padding:6px 4px; text-align:center; }
@@ -664,9 +664,9 @@ function sectionHtml(sec){
   let html = `<div class="doc-section"><h3>${escapeHtml(sec.title)}</h3>`;
   const specLines = (sec.specs||'').split('\n').map(l=>l.trim()).filter(Boolean);
   if(specLines.length){
-    html += `<div class="spec-lab">المواصفات :</div><ul>`;
-    specLines.forEach(l=> html += `<li>${escapeHtml(l)}</li>`);
-    html += `</ul>`;
+    html += `<div class="spec-lab">المواصفات :</div><div class="spec-list">`;
+    specLines.forEach(l=> html += `<div class="spec-line">•&nbsp;&nbsp;${escapeHtml(l)}</div>`);
+    html += `</div>`;
   }
   sec.tables.forEach(t=>{
     html += `<table class="doc-table"><thead><tr>
