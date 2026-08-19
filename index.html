@@ -116,6 +116,11 @@
   table.editor-table td{ border:1px solid var(--line); padding:4px; text-align:center; vertical-align:middle;}
   table.editor-table td input{ border:none; background:transparent; padding:4px 2px; text-align:center; font-size:12.5px; width:100%; }
   table.editor-table td input:focus{ outline:1.5px solid var(--gold); border-radius:4px; }
+  table.editor-table td textarea.size-ta{
+    border:none; background:transparent; padding:4px 2px; text-align:center; font-size:12.5px; width:100%;
+    font-family:inherit; resize:none; overflow:hidden; line-height:1.5; display:block;
+  }
+  table.editor-table td textarea.size-ta:focus{ outline:1.5px solid var(--gold); border-radius:4px; }
   .row-del{ background:none; border:none; color:var(--red); font-size:15px; cursor:pointer; padding:2px 6px;}
   .table-block{ border:1px dashed var(--line); border-radius:10px; padding:8px; margin-bottom:10px; background:#fffdf7;}
   .table-total{ display:flex; justify-content:space-between; font-weight:800; font-size:13px; color:var(--brown); padding:4px 6px;}
@@ -639,21 +644,24 @@ function renderTableBlock(secId, t){
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><input type="text" value="${escapeAttr(r.name)}" data-f="name"></td>
-      <td><input type="text" value="${escapeAttr(r.size)}" data-f="size" placeholder="مثال 100x220"></td>
+      <td><textarea data-f="size" rows="1" class="size-ta" placeholder="مثال 100x220">${escapeHtml(r.size)}</textarea></td>
       <td><input type="number" value="${r.qty}" data-f="qty" min="0" style="width:44px"></td>
       <td><input type="number" value="${r.price}" data-f="price" min="0" step="0.001" style="width:60px"></td>
       <td class="rowTotal">${fmtMoney((Number(r.qty)||0)*(Number(r.price)||0))}</td>
       <td><button class="row-del">✕</button></td>
     `;
-    tr.querySelectorAll('input').forEach(inp=>{
+    tr.querySelectorAll('input, textarea').forEach(inp=>{
       inp.oninput = ()=>{
         const f = inp.dataset.f;
         r[f] = (f==='qty'||f==='price') ? Number(inp.value) : inp.value;
+        if(f==='size'){ inp.rows = Math.max(1, inp.value.split('\n').length); }
         tr.querySelector('.rowTotal').textContent = fmtMoney((Number(r.qty)||0)*(Number(r.price)||0));
         wrap.querySelector('.tblTotalVal').textContent = 'ر.ع ' + fmtMoney(tableTotal(t));
         renderPreview();
       };
     });
+    const sizeTa = tr.querySelector('.size-ta');
+    if(sizeTa) sizeTa.rows = Math.max(1, (r.size||'').split('\n').length);
     tr.querySelector('.row-del').onclick = ()=>removeRow(secId, t.id, r.id);
     tbody.appendChild(tr);
   });
@@ -701,7 +709,7 @@ function sectionHtml(sec){
     t.rows.forEach(r=>{
       const rt = (Number(r.qty)||0)*(Number(r.price)||0);
       html += `<tr>
-        <td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.size)}</td><td>${r.qty||0}</td>
+        <td>${escapeHtml(r.name)}</td><td>${escapeHtml(r.size).replace(/\n/g,'<br>')}</td><td>${r.qty||0}</td>
         <td>${fmtMoney(r.price)}<img class="rial-ic" src="${RIAL_SRC}" alt="ر.ع"></td><td>${fmtMoney(rt)}<img class="rial-ic" src="${RIAL_SRC}" alt="ر.ع"></td>
       </tr>`;
     });
@@ -950,21 +958,45 @@ try{
 let currentDocId = null;   // Firestore doc id of the quote currently loaded, null = never saved
 let isDirty = false;
 let suppressDirty = false;
+let autosaveTimer = null;
+const DRAFT_KEY = 'saraya_quote_draft_v1';
 
 function markDirty(){
   if(suppressDirty) return;
   isDirty = true;
   setSaveStatus(currentDocId ? 'dirty-existing' : 'dirty-new');
+  saveDraftLocal();
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(()=>{ if(db) saveQuote(false, true); }, 4000);
 }
 function setSaveStatus(state){
   const el = document.getElementById('saveStatus');
   el.classList.remove('dirty','saved');
-  if(state==='dirty-new'){ el.textContent='🟡 عرض جديد — لم يُحفظ بعد'; el.classList.add('dirty'); }
-  else if(state==='dirty-existing'){ el.textContent='🟡 تعديلات غير محفوظة'; el.classList.add('dirty'); }
+  if(state==='dirty-new'){ el.textContent='🟡 عرض جديد — سيُحفظ تلقائيًا خلال ثوانٍ'; el.classList.add('dirty'); }
+  else if(state==='dirty-existing'){ el.textContent='🟡 جاري الحفظ التلقائي خلال ثوانٍ...'; el.classList.add('dirty'); }
   else if(state==='saved'){ el.textContent='🟢 محفوظ ✓'; el.classList.add('saved'); }
   else if(state==='saving'){ el.textContent='⏳ جاري الحفظ...'; }
   else if(state==='loading'){ el.textContent='⏳ جاري التحميل...'; }
-  else if(state==='error'){ el.textContent='🔴 تعذّر الاتصال — تحقق من الإنترنت'; el.classList.add('dirty'); }
+  else if(state==='error'){ el.textContent='🔴 تعذّر الاتصال — تم حفظ مسودة محليًا على الجهاز'; el.classList.add('dirty'); }
+}
+
+/* ---- local draft safety net (protects against forgetting to save / losing connection) ---- */
+function saveDraftLocal(){
+  try{
+    const data = collectQuoteDataRaw();
+    data.currentDocId = currentDocId;
+    data.savedAt = Date.now();
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(data));
+  }catch(e){ /* storage unavailable — ignore, cloud autosave still applies */ }
+}
+function loadDraftLocal(){
+  try{
+    const raw = localStorage.getItem(DRAFT_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function clearDraftLocal(){
+  try{ localStorage.removeItem(DRAFT_KEY); }catch(e){}
 }
 
 /* ============ quote number generation (year/month + yearly-reset sequence) ============ */
@@ -992,6 +1024,8 @@ async function newQuote(isInit){
   if(!isInit && isDirty){
     if(!confirm('فيه تعديلات غير محفوظة، هل تبي تبدأ عرض جديد بدونها؟')) return;
   }
+  clearTimeout(autosaveTimer);
+  clearDraftLocal();
   suppressDirty = true;
   uid = 1;
   pages = [ { id: newId() } ];
@@ -1022,7 +1056,7 @@ async function newQuote(isInit){
   switchTab('edit');
 }
 
-function collectQuoteData(){
+function collectQuoteDataRaw(){
   return {
     quoteNo: document.getElementById('quoteNo').value,
     custName: document.getElementById('custName').value,
@@ -1032,12 +1066,17 @@ function collectQuoteData(){
     noteText: document.getElementById('noteText').value,
     pages: pages,
     sections: sections,
-    sectionTitles: [...new Set(sections.map(s=>s.title).filter(Boolean))],
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    sectionTitles: [...new Set(sections.map(s=>s.title).filter(Boolean))]
   };
 }
+function collectQuoteData(){
+  const d = collectQuoteDataRaw();
+  d.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+  return d;
+}
 
-async function saveQuote(asNew){
+async function saveQuote(asNew, silent){
+  clearTimeout(autosaveTimer);
   setSaveStatus('saving');
   try{
     let quoteNo = document.getElementById('quoteNo').value;
@@ -1056,11 +1095,28 @@ async function saveQuote(asNew){
     isDirty = false;
     setSaveStatus('saved');
     invalidateSavedCache();
-    showToast('تم الحفظ ✓');
+    clearDraftLocal();
+    if(!silent) showToast('تم الحفظ ✓');
   }catch(err){
     setSaveStatus('error');
-    showToast('تعذّر الحفظ — تحقق من الإنترنت');
+    if(!silent) showToast('تعذّر الحفظ — تحقق من الإنترنت');
   }
+}
+
+function populateFromData(d){
+  suppressDirty = true;
+  uid = Date.now();
+  pages = d.pages && d.pages.length ? d.pages : [{id:newId()}];
+  sections = d.sections || [];
+  document.getElementById('quoteNo').value = d.quoteNo || '';
+  document.getElementById('custName').value = d.custName || '';
+  document.getElementById('custContact').value = d.custContact || '';
+  document.getElementById('quoteDate').value = d.quoteDate || new Date().toISOString().slice(0,10);
+  document.getElementById('noteEnabled').checked = d.noteEnabled !== false;
+  document.getElementById('noteText').value = d.noteText || '';
+  renderSections();
+  renderPreview();
+  suppressDirty = false;
 }
 
 async function loadQuote(docId){
@@ -1069,22 +1125,11 @@ async function loadQuote(docId){
     const snap = await db.collection('quotes').doc(docId).get();
     if(!snap.exists){ showToast('العرض غير موجود'); return; }
     const d = snap.data();
-    suppressDirty = true;
-    uid = Date.now();
-    pages = d.pages && d.pages.length ? d.pages : [{id:newId()}];
-    sections = d.sections || [];
     currentDocId = docId;
-    document.getElementById('quoteNo').value = d.quoteNo || '';
-    document.getElementById('custName').value = d.custName || '';
-    document.getElementById('custContact').value = d.custContact || '';
-    document.getElementById('quoteDate').value = d.quoteDate || new Date().toISOString().slice(0,10);
-    document.getElementById('noteEnabled').checked = d.noteEnabled !== false;
-    document.getElementById('noteText').value = d.noteText || '';
-    renderSections();
-    renderPreview();
-    suppressDirty = false;
+    populateFromData(d);
     isDirty = false;
     setSaveStatus('saved');
+    clearDraftLocal();
     switchTab('edit');
     showToast('تم فتح العرض');
   }catch(err){
@@ -1201,9 +1246,28 @@ async function init(){
     document.getElementById(id).addEventListener('input', renderPreview);
   });
 
+  const draft = loadDraftLocal();
+  if(draft && (draft.custName || draft.sections?.length)){
+    const label = `${draft.quoteNo || 'بدون رقم'}${draft.custName ? ' — ' + draft.custName : ''}`;
+    if(confirm(`فيه عرض غير محفوظ من جلسة سابقة (${label})، تبي تسترجعه؟`)){
+      currentDocId = draft.currentDocId || null;
+      populateFromData(draft);
+      isDirty = true;
+      setSaveStatus(currentDocId ? 'dirty-existing' : 'dirty-new');
+      switchTab('edit');
+      showToast('تم استرجاع المسودة');
+      return;
+    } else {
+      clearDraftLocal();
+    }
+  }
+
   await newQuote(true);
 }
 init();
+window.addEventListener('beforeunload', (e)=>{
+  if(isDirty){ e.preventDefault(); e.returnValue = ''; }
+});
 </script>
 </body>
 </html>
