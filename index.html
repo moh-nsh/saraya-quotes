@@ -318,6 +318,12 @@
     <span class="ic">🔎</span>
     <input type="text" id="savedSearch" placeholder="ابحث برقم العرض أو اسم الزبون..." oninput="renderSavedList()">
   </div>
+  <div class="field" style="margin-bottom:12px;">
+    <label>فرز حسب القسم</label>
+    <select id="savedSectionFilter" onchange="renderSavedList()">
+      <option value="">كل الأقسام</option>
+    </select>
+  </div>
   <div id="savedListHost"></div>
 </div>
 
@@ -1102,9 +1108,30 @@ async function deleteQuote(docId, label){
 
 /* ============ saved list ============ */
 let savedListCache = null;
+
+function getKnownSectionTitles(){
+  const set = new Set();
+  sections.forEach(s=>{ if(s.title) set.add(s.title); });
+  if(savedListCache){
+    savedListCache.forEach(it=>{ (it.sectionTitles||[]).forEach(t=>{ if(t) set.add(t); }); });
+  }
+  return Array.from(set).sort((a,b)=>a.localeCompare(b,'ar'));
+}
+
+function populateSectionFilterOptions(){
+  const sel = document.getElementById('savedSectionFilter');
+  const current = sel.value;
+  const titles = getKnownSectionTitles();
+  sel.innerHTML = `<option value="">كل الأقسام</option>` +
+    titles.map(t=>`<option value="${escapeAttr(t)}">${escapeHtml(t)}</option>`).join('');
+  if(titles.includes(current)) sel.value = current;
+}
+
 async function renderSavedList(){
   const host = document.getElementById('savedListHost');
   const q = (document.getElementById('savedSearch').value || '').trim().toLowerCase();
+
+  populateSectionFilterOptions();
 
   if(savedListCache===null){
     host.innerHTML = `<div class="saved-loading">⏳ جاري تحميل العروض المحفوظة...</div>`;
@@ -1115,8 +1142,10 @@ async function renderSavedList(){
       host.innerHTML = `<div class="saved-error">تعذّر تحميل القائمة — تحقق من الإنترنت</div>`;
       return;
     }
+    populateSectionFilterOptions();
   }
 
+  const sectionFilter = document.getElementById('savedSectionFilter').value;
   let items = savedListCache;
   if(q){
     items = items.filter(it =>
@@ -1125,9 +1154,12 @@ async function renderSavedList(){
       (it.sectionTitles||[]).some(t=>(t||'').toLowerCase().includes(q))
     );
   }
+  if(sectionFilter){
+    items = items.filter(it => (it.sectionTitles||[]).includes(sectionFilter));
+  }
 
   if(items.length===0){
-    host.innerHTML = `<div class="saved-empty">${q ? 'ما فيه نتائج مطابقة' : 'ما فيه عروض محفوظة بعد'}</div>`;
+    host.innerHTML = `<div class="saved-empty">${(q||sectionFilter) ? 'ما فيه نتائج مطابقة' : 'ما فيه عروض محفوظة بعد'}</div>`;
     return;
   }
 
